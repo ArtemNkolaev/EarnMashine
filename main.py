@@ -93,12 +93,115 @@ class EarnMashine(arcade.Window):
         self.spin_button.is_pressed = False
 
 
+class Reel:
+    def __init__(self, x, y, width, height):
+        self.x = x
+        self.y = y
+        self.width = width
+        self.batch = Batch()
+        self.height = height
+        self.reel_text = arcade.Text(
+            "SPINNING...",
+            self.x - self.width // 3,
+            self.height - 80,
+            arcade.color.YELLOW,
+            16,
+            align="center",
+            batch=self.batch)
+        self.current_symbol_idx = 0
+        self.is_spinning = False
+        self.spin_speed = 0.01
+        self.last_spin_time = 0
+        self.final_symbol_idx = 0
+        self.bg_color = arcade.color.DARK_GRAY
+        self.border_color = arcade.color.GOLD
+
+    def start_spin(self, duration=1.5):
+        self.is_spinning = True
+        self.spin_start_time = time.time()
+        self.spin_duration = duration
+        self.last_symbol_change = time.time()
+        weights = [s["weight"] for s in SYMBOLS]
+        self.final_symbol_idx = random.choices(range(len(SYMBOLS)), weights=weights)[0]
+
+    def update(self):
+        if not self.is_spinning:
+            return
+
+        current_time = time.time()
+        elapsed = current_time - self.spin_start_time
+
+        if elapsed >= self.spin_duration:
+            self.is_spinning = False
+            self.current_symbol_idx = self.final_symbol_idx
+            self.spin_speed = 0.1
+            return
+
+        if current_time - self.last_spin_time > self.spin_speed:
+            self.current_symbol_idx = (self.current_symbol_idx + 1) % len(SYMBOLS)
+            self.last_spin_time = current_time
+
+            if elapsed > self.spin_duration * 0.7:
+                self.spin_speed *= 1.1
+                if self.spin_speed > 0.3:
+                    self.spin_speed = 0.3
+
+    def draw(self):
+        arcade.draw_lbwh_rectangle_filled(
+            self.x - self.width // 2, self.y - self.height // 3, self.width, self.height, self.bg_color
+        )
+
+        arcade.draw_lbwh_rectangle_outline(
+            self.x - self.width // 2, self.y - self.height // 3, self.width, self.height, self.border_color, 3
+        )
+
+        symbol = SYMBOLS[self.current_symbol_idx]["emoji"]
+        arcade.draw_text(
+            symbol,
+            self.x,
+            self.height * 1.4,
+            arcade.color.WHITE,
+            70,
+            align="center",
+            anchor_x="center",
+            anchor_y="center"
+        )
+
+        if self.is_spinning:
+            self.batch.draw()
 
 
+class Button:
+    def __init__(self, x, y, width, height, text,
+                 color=arcade.color.GREEN,
+                 text_color=arcade.color.WHITE):
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.text = text
+        self.color = color
+        self.text_color = text_color
+        self.is_pressed = False
+        self.rect = (self.x - self.width, self.y - self.height, self.width * 2, self.height * 2)
+        self.batch = Batch()
+        self.but_text = arcade.Text(
+            self.text, self.x - 31, self.y,
+            self.text_color, 20,
+            align="center", batch=self.batch
 
+        )
 
+    def draw(self):
+        current_color = arcade.color.RED if self.is_pressed else self.color
+        arcade.draw_lbwh_rectangle_filled(
+            *self.rect, current_color
+        )
+        self.batch.draw()
 
-
+    def check_click(self, x, y):
+        return (self.x - self.width <= x <= self.x + self.width and
+                self.y - self.height <= y <= self.y + self.height)
 
 
 def main():
