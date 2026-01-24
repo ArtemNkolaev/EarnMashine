@@ -7,7 +7,6 @@ from PyQt6 import QtWidgets
 from pyglet.graphics import Batch
 
 
-
 DB_NAME = "users.db"
 
 def init_db():
@@ -41,7 +40,6 @@ def init_db():
 
 
 class LoginWindow(QtWidgets.QWidget):
-
     def __init__(self):
         super().__init__()
         self.setWindowTitle("EarnMashine Login")
@@ -49,7 +47,6 @@ class LoginWindow(QtWidgets.QWidget):
 
         self.user_authenticated = False
         self.user_id = None
-
         self.initial_balance = 1000
         self.initial_bet = 10
 
@@ -67,7 +64,6 @@ class LoginWindow(QtWidgets.QWidget):
         self.password_input.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
         layout.addWidget(self.password_input)
 
-
         self.balance_input = QtWidgets.QLineEdit()
         self.balance_input.setPlaceholderText("Initial Balance (e.g. 2000)")
         layout.addWidget(self.balance_input)
@@ -79,7 +75,6 @@ class LoginWindow(QtWidgets.QWidget):
         self.apply_button = QtWidgets.QPushButton("Apply Settings")
         self.apply_button.clicked.connect(self.apply_settings)
         layout.addWidget(self.apply_button)
-
 
         self.info_label = QtWidgets.QLabel("")
         layout.addWidget(self.info_label)
@@ -93,7 +88,6 @@ class LoginWindow(QtWidgets.QWidget):
         layout.addWidget(self.register_button)
 
         self.setLayout(layout)
-
 
     def apply_settings(self):
         try:
@@ -151,6 +145,7 @@ class LoginWindow(QtWidgets.QWidget):
         except sqlite3.IntegrityError:
             self.info_label.setText("Username already exists")
 
+
 def run_login():
     app = QtWidgets.QApplication(sys.argv)
     window = LoginWindow()
@@ -175,7 +170,6 @@ SYMBOLS = [
 
 
 class ThemeManager:
-
     def __init__(self):
         self.current_theme = "light"
         self.themes = {}
@@ -204,224 +198,130 @@ class ThemeManager:
     def get(self, key):
         return self.themes[self.current_theme][key]
 
+class WinEffect:
 
+    def __init__(self):
+        self.active = False
+        self.start_time = 0
+        self.duration = 1.5
+        self.particles = [] 
+        self.x = 0 
+        self.y = 0
+        self.text_size = 48
+        self.rising_speed = 50
 
-class EarnMashine(arcade.Window):
+    def start(self, x, y):
+        self.active = True
+        self.start_time = time.time()
+        self.x = x
+        self.y = y
 
-    def __init__(self, user_id, initial_balance=1000, initial_bet=10):
-        super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_TITLE)
+        self.particles = []
+        for _ in range(40):
+            particle = {
+                "x": x,
+                "y": y,
+                "dx": random.uniform(-3, 3),
+                "dy": random.uniform(2, 6),
+                "radius": random.randint(2, 6),
+                "color": random.choice([
+                    arcade.color.YELLOW,
+                    arcade.color.GOLD,
+                    arcade.color.ORANGE,
+                    arcade.color.RED_ORANGE
+                ])
+            }
+            self.particles.append(particle)
 
-        self.user_id = user_id
-        self.theme_manager = ThemeManager()
-
-        self.initial_balance = initial_balance
-        self.initial_bet = initial_bet
-
-        self.load_progress()
-
-        self.reels = [
-            Reel(350, 350),
-            Reel(450, 350),
-            Reel(550, 350)
-        ]
-
-        self.spin_button = Button(450, 100, 160, 50, "SPIN")
-        self.theme_button = Button(820, 560, 120, 35, "THEME")
-
-
-        self.bet_plus_button = Button(650, 100, 50, 40, "+")
-        self.bet_minus_button = Button(250, 100, 50, 40, "-")
-
-        self.is_game_spinning = False
-
-        self.apply_theme()
-
-
-    def apply_theme(self):
-        arcade.set_background_color(self.theme_manager.get("background"))
-
-        for reel in self.reels:
-            reel.bg_color = self.theme_manager.get("reel_bg")
-            reel.border_color = self.theme_manager.get("reel_border")
-
-        self.spin_button.color = self.theme_manager.get("button")
-        self.bet_plus_button.color = self.theme_manager.get("button")
-        self.bet_minus_button.color = self.theme_manager.get("button")
-
-
-    def load_progress(self):
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            SELECT balance, level, xp,
-                   total_spins, total_wins,
-                   total_win_amount, lose_streak
-            FROM progress WHERE user_id=?
-        """, (self.user_id,))
-
-        result = cursor.fetchone()
-        if result:
-            (
-                self.balance,
-                self.level,
-                self.xp,
-                self.total_spins,
-                self.total_wins,
-                self.total_win_amount,
-                self.lose_streak
-            ) = result
-        else:
-            self.balance = self.initial_balance
-            self.level = 1
-            self.xp = 0
-            self.total_spins = 0
-            self.total_wins = 0
-            self.total_win_amount = 0
-            self.lose_streak = 0
-
-        conn.close()
-
-        self.bet = self.initial_bet
-        self.xp_to_next = 100
-
-    def save_progress(self):
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            UPDATE progress SET
-            balance=?, level=?, xp=?,
-            total_spins=?, total_wins=?,
-            total_win_amount=?, lose_streak=?
-            WHERE user_id=?
-        """, (
-            self.balance,
-            self.level,
-            self.xp,
-            self.total_spins,
-            self.total_wins,
-            self.total_win_amount,
-            self.lose_streak,
-            self.user_id
-        ))
-
-        conn.commit()
-        conn.close()
-
-
-
-    def add_xp(self, amount):
-        self.xp += amount
-        if self.xp >= self.xp_to_next:
-            self.level_up()
-
-    def level_up(self):
-        self.xp -= self.xp_to_next
-        self.level += 1
-        self.xp_to_next = int(self.xp_to_next * 1.5)
-        self.balance += 50
-
-
-    def increase_bet(self):
-        self.bet += 5
-
-    def decrease_bet(self):
-        if self.bet > 5:
-            self.bet -= 5
-
-
-    def on_draw(self):
-        self.clear()
-
-        for reel in self.reels:
-            reel.draw()
-
-        self.spin_button.draw()
-        self.theme_button.draw()
-        self.bet_plus_button.draw()
-        self.bet_minus_button.draw()
-
-        arcade.draw_text(
-            f"Balance: ${self.balance}",
-            20, SCREEN_HEIGHT - 40,
-            self.theme_manager.get("text"), 18
-        )
-        arcade.draw_text(
-            f"LEVEL: {self.level}  XP: {self.xp}/{self.xp_to_next}",
-            20, SCREEN_HEIGHT - 65,
-            self.theme_manager.get("text"), 14
-        )
-        arcade.draw_text(
-            f"SPINS: {self.total_spins}  WINS: {self.total_wins}",
-            20, SCREEN_HEIGHT - 90,
-            self.theme_manager.get("text"), 14
-        )
-        arcade.draw_text(
-            f"BET: ${self.bet}",
-            SCREEN_WIDTH // 2,
-            160,
-            self.theme_manager.get("text"),
-            18,
-            anchor_x="center"
-        )
-
-    def on_update(self, delta_time):
-        for reel in self.reels:
-            reel.update()
-
-        if self.is_game_spinning and not any(r.is_spinning for r in self.reels):
-            self.is_game_spinning = False
-            self.check_win()
-            self.save_progress()
-
-
-
-    def spin_all_reels(self):
-        if self.balance < self.bet:
+    def update(self):
+        """
+        Обновление состояния эффекта: движение частиц и подъем текста.
+        """
+        if not self.active:
             return
 
-        self.balance -= self.bet
-        self.total_spins += 1
-        self.add_xp(10)
+        elapsed = time.time() - self.start_time
 
-        for reel in self.reels:
-            reel.start_spin()
+        if elapsed > self.duration:
+            self.active = False
+            self.particles = []
+            return
 
-        self.is_game_spinning = True
+        for p in self.particles:
+            p["x"] += p["dx"]
+            p["y"] += p["dy"]
+            p["radius"] *= 0.93
 
-    def check_win(self):
-        ids = [r.current_symbol_idx for r in self.reels]
+        self.y += self.rising_speed * 0.016
+        self.text_size = max(24, self.text_size * 0.98)
 
-        if ids[0] == ids[1] == ids[2]:
-            win = self.bet * SYMBOLS[ids[0]]["multiplier"]
-            self.balance += win
-            self.total_wins += 1
-            self.total_win_amount += win
-            self.lose_streak = 0
-            self.add_xp(25)
-        else:
-            self.lose_streak += 1
-            self.add_xp(5)
+    def draw(self):
+        if not self.active:
+            return
 
-    def on_mouse_press(self, x, y, button, modifiers):
-        if self.spin_button.check_click(x, y) and not self.is_game_spinning:
-            self.spin_all_reels()
+        for p in self.particles:
+            arcade.draw_circle_filled(
+                p["x"],
+                p["y"],
+                max(1, p["radius"]),
+                p["color"]
+            )
 
-        if self.theme_button.check_click(x, y):
-            self.theme_manager.toggle_theme()
-            self.apply_theme()
+        arcade.draw_text(
+            "WIN!",
+            self.x,
+            self.y + 100,
+            arcade.color.YELLOW_ORANGE,
+            self.text_size,
+            anchor_x="center",
+            anchor_y="center"
+        )
 
-        if self.bet_plus_button.check_click(x, y):
-            self.increase_bet()
+        for i in range(5):
+            star_x = self.x + random.randint(-60, 60)
+            star_y = self.y + 100 + random.randint(-20, 20)
+            radius = random.randint(1, 3)
+            arcade.draw_circle_filled(star_x, star_y, radius, arcade.color.WHITE)
+        arcade.draw_circle_outline(
+            self.x,
+            self.y + 100,
+            self.text_size + 20,
+            arcade.color.LIGHT_YELLOW,
+            2
+        )
 
-        if self.bet_minus_button.check_click(x, y):
-            self.decrease_bet()
 
+class Button:
+    def __init__(self, x, y, width, height, text):
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.text = text
+        self.color = arcade.color.GRAY
 
+    def draw(self):
+        arcade.draw_lbwh_rectangle_filled(
+            self.x - self.width / 2,
+            self.y - self.height / 2,
+            self.width,
+            self.height,
+            self.color
+        )
+        arcade.draw_text(
+            self.text,
+            self.x, self.y,
+            arcade.color.WHITE, 14,
+            anchor_x="center", anchor_y="center"
+        )
+
+    def check_click(self, x, y):
+        return (
+            self.x - self.width / 2 <= x <= self.x + self.width / 2 and
+            self.y - self.height / 2 <= y <= self.y + self.height / 2
+        )
 
 class Reel:
-
     def __init__(self, x, y):
         self.x = x
         self.y = y
@@ -455,39 +355,167 @@ class Reel:
         )
 
 
+class EarnMashine(arcade.Window):
+    def __init__(self, user_id, initial_balance=1000, initial_bet=10):
+        super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_TITLE)
+        self.user_id = user_id
+        self.theme_manager = ThemeManager()
+        self.initial_balance = initial_balance
+        self.initial_bet = initial_bet
+        self.load_progress()
 
-class Button:
+        self.reels = [Reel(350, 350), Reel(450, 350), Reel(550, 350)]
+        self.spin_button = Button(450, 100, 160, 50, "SPIN")
+        self.theme_button = Button(820, 560, 120, 35, "THEME")
+        self.bet_plus_button = Button(650, 100, 50, 40, "+")
+        self.bet_minus_button = Button(250, 100, 50, 40, "-")
 
-    def __init__(self, x, y, width, height, text):
-        self.x = x
-        self.y = y
-        self.width = width
-        self.height = height
-        self.text = text
-        self.color = arcade.color.GRAY
+        self.is_game_spinning = False
+        self.win_effect = WinEffect()
+        self.apply_theme()
 
-    def draw(self):
-        arcade.draw_lbwh_rectangle_filled(
-            self.x - self.width / 2,
-            self.y - self.height / 2,
-            self.width,
-            self.height,
-            self.color
-        )
-        arcade.draw_text(
-            self.text,
-            self.x, self.y,
-            arcade.color.WHITE, 14,
-            anchor_x="center", anchor_y="center"
-        )
+    def apply_theme(self):
+        arcade.set_background_color(self.theme_manager.get("background"))
+        for reel in self.reels:
+            reel.bg_color = self.theme_manager.get("reel_bg")
+            reel.border_color = self.theme_manager.get("reel_border")
+        self.spin_button.color = self.theme_manager.get("button")
+        self.bet_plus_button.color = self.theme_manager.get("button")
+        self.bet_minus_button.color = self.theme_manager.get("button")
 
-    def check_click(self, x, y):
-        return (
-            self.x - self.width / 2 <= x <= self.x + self.width / 2 and
-            self.y - self.height / 2 <= y <= self.y + self.height / 2
-        )
+    def load_progress(self):
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT balance, level, xp,
+                   total_spins, total_wins,
+                   total_win_amount, lose_streak
+            FROM progress WHERE user_id=?
+        """, (self.user_id,))
+        result = cursor.fetchone()
+        if result:
+            (
+                self.balance,
+                self.level,
+                self.xp,
+                self.total_spins,
+                self.total_wins,
+                self.total_win_amount,
+                self.lose_streak
+            ) = result
+        else:
+            self.balance = self.initial_balance
+            self.level = 1
+            self.xp = 0
+            self.total_spins = 0
+            self.total_wins = 0
+            self.total_win_amount = 0
+            self.lose_streak = 0
+        conn.close()
+        self.bet = self.initial_bet
+        self.xp_to_next = 100
 
+    def save_progress(self):
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE progress SET
+            balance=?, level=?, xp=?,
+            total_spins=?, total_wins=?,
+            total_win_amount=?, lose_streak=?
+            WHERE user_id=?
+        """, (
+            self.balance,
+            self.level,
+            self.xp,
+            self.total_spins,
+            self.total_wins,
+            self.total_win_amount,
+            self.lose_streak,
+            self.user_id
+        ))
+        conn.commit()
+        conn.close()
 
+    def add_xp(self, amount):
+        self.xp += amount
+        if self.xp >= self.xp_to_next:
+            self.level_up()
+
+    def level_up(self):
+        self.xp -= self.xp_to_next
+        self.level += 1
+        self.xp_to_next = int(self.xp_to_next * 1.5)
+        self.balance += 50
+
+    def increase_bet(self):
+        self.bet += 5
+
+    def decrease_bet(self):
+        if self.bet > 5:
+            self.bet -= 5
+
+    def on_draw(self):
+        self.clear()
+        for reel in self.reels:
+            reel.draw()
+        self.spin_button.draw()
+        self.theme_button.draw()
+        self.bet_plus_button.draw()
+        self.bet_minus_button.draw()
+        arcade.draw_text(f"Balance: ${self.balance}", 20, SCREEN_HEIGHT - 40,
+                         self.theme_manager.get("text"), 18)
+        arcade.draw_text(f"LEVEL: {self.level}  XP: {self.xp}/{self.xp_to_next}",
+                         20, SCREEN_HEIGHT - 65, self.theme_manager.get("text"), 14)
+        arcade.draw_text(f"SPINS: {self.total_spins}  WINS: {self.total_wins}",
+                         20, SCREEN_HEIGHT - 90, self.theme_manager.get("text"), 14)
+        arcade.draw_text(f"BET: ${self.bet}", SCREEN_WIDTH // 2, 160,
+                         self.theme_manager.get("text"), 18, anchor_x="center")
+        self.win_effect.draw()
+
+    def on_update(self, delta_time):
+        for reel in self.reels:
+            reel.update()
+        self.win_effect.update()
+        if self.is_game_spinning and not any(r.is_spinning for r in self.reels):
+            self.is_game_spinning = False
+            self.check_win()
+            self.save_progress()
+
+    def spin_all_reels(self):
+        if self.balance < self.bet:
+            return
+        self.balance -= self.bet
+        self.total_spins += 1
+        self.add_xp(10)
+        for reel in self.reels:
+            reel.start_spin()
+        self.is_game_spinning = True
+
+    def check_win(self):
+        ids = [r.current_symbol_idx for r in self.reels]
+        if ids[0] == ids[1] == ids[2]:
+            win = self.bet * SYMBOLS[ids[0]]["multiplier"]
+            self.balance += win
+            self.total_wins += 1
+            self.total_win_amount += win
+            self.lose_streak = 0
+            self.add_xp(25)
+            self.win_effect.start(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
+        else:
+            self.lose_streak += 1
+            self.add_xp(5)
+
+    def on_mouse_press(self, x, y, button, modifiers):
+        if self.spin_button.check_click(x, y) and not self.is_game_spinning:
+            self.spin_all_reels()
+        if self.theme_button.check_click(x, y):
+            self.theme_manager.toggle_theme()
+            self.apply_theme()
+        if self.bet_plus_button.check_click(x, y):
+            self.increase_bet()
+        if self.bet_minus_button.check_click(x, y):
+            self.decrease_bet()
 
 def main():
     init_db()
@@ -496,6 +524,7 @@ def main():
         arcade.play_sound(background_music, loop=True, volume=0.8)
         EarnMashine(user_id, init_balance, init_bet)
         arcade.run()
+
 
 if __name__ == "__main__":
     main()
