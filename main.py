@@ -4,10 +4,9 @@ import time
 import sys
 import sqlite3
 from PyQt6 import QtWidgets
-from pyglet.graphics import Batch
-
 
 DB_NAME = "users.db"
+
 
 def init_db():
     conn = sqlite3.connect(DB_NAME)
@@ -17,7 +16,8 @@ def init_db():
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL
+            password TEXT NOT NULL,
+            avatar TEXT DEFAULT '🐱'
         )
     """)
 
@@ -145,7 +145,6 @@ class LoginWindow(QtWidgets.QWidget):
         except sqlite3.IntegrityError:
             self.info_label.setText("Username already exists")
 
-
 def run_login():
     app = QtWidgets.QApplication(sys.argv)
     window = LoginWindow()
@@ -157,8 +156,6 @@ def run_login():
 SCREEN_WIDTH = 900
 SCREEN_HEIGHT = 600
 SCREEN_TITLE = "EarnMashine"
-
-background_music = arcade.load_sound("music/music.mp3")
 
 SYMBOLS = [
     {"emoji": "🍒", "multiplier": 2, "weight": 30},
@@ -198,8 +195,8 @@ class ThemeManager:
     def get(self, key):
         return self.themes[self.current_theme][key]
 
-class WinEffect:
 
+class WinEffect:
     def __init__(self):
         self.active = False
         self.start_time = 0
@@ -234,14 +231,10 @@ class WinEffect:
             self.particles.append(particle)
 
     def update(self):
-        """
-        Обновление состояния эффекта: движение частиц и подъем текста.
-        """
         if not self.active:
             return
 
         elapsed = time.time() - self.start_time
-
         if elapsed > self.duration:
             self.active = False
             self.particles = []
@@ -321,6 +314,7 @@ class Button:
             self.y - self.height / 2 <= y <= self.y + self.height / 2
         )
 
+
 class Reel:
     def __init__(self, x, y):
         self.x = x
@@ -355,6 +349,72 @@ class Reel:
         )
 
 
+class AccountWindow(QtWidgets.QWidget):
+    def __init__(self, user_id):
+        super().__init__()
+        self.user_id = user_id
+        self.setWindowTitle("Account Settings")
+        self.setGeometry(600, 350, 400, 350)
+        self.selected_avatar = "🐱"
+        self.init_ui()
+        self.load_user_data()
+
+    def init_ui(self):
+        layout = QtWidgets.QVBoxLayout()
+
+        self.username_label = QtWidgets.QLabel("Username: ")
+        layout.addWidget(self.username_label)
+
+        self.password_label = QtWidgets.QLabel("Password: ")
+        layout.addWidget(self.password_label)
+
+        layout.addWidget(QtWidgets.QLabel("Choose your avatar:"))
+
+        self.avatar_buttons = {}
+        avatars = ["🐱", "🐶", "🐻", "🐦"]
+        avatar_layout = QtWidgets.QHBoxLayout()
+        for av in avatars:
+            btn = QtWidgets.QPushButton(av)
+            btn.setFixedSize(60, 60)
+            btn.clicked.connect(lambda checked, a=av: self.select_avatar(a))
+            avatar_layout.addWidget(btn)
+            self.avatar_buttons[av] = btn
+        layout.addLayout(avatar_layout)
+
+        self.save_button = QtWidgets.QPushButton("Save Changes")
+        self.save_button.clicked.connect(self.save_changes)
+        layout.addWidget(self.save_button)
+
+        self.status_label = QtWidgets.QLabel("")
+        layout.addWidget(self.status_label)
+
+        self.setLayout(layout)
+
+    def load_user_data(self):
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("SELECT username, password, avatar FROM users WHERE id=?", (self.user_id,))
+        result = cursor.fetchone()
+        conn.close()
+        if result:
+            username, password, avatar = result
+            self.username_label.setText(f"Username: {username}")
+            self.password_label.setText(f"Password: {'*' * len(password)}")
+            self.selected_avatar = avatar
+
+    def select_avatar(self, avatar):
+        self.selected_avatar = avatar
+        self.status_label.setText(f"Selected avatar: {avatar}")
+
+    def save_changes(self):
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET avatar=? WHERE id=?", (self.selected_avatar, self.user_id))
+        conn.commit()
+        conn.close()
+        self.status_label.setText(f"Avatar saved: {self.selected_avatar}")
+
+
 class EarnMashine(arcade.Window):
     def __init__(self, user_id, initial_balance=1000, initial_bet=10):
         super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_TITLE)
@@ -362,17 +422,24 @@ class EarnMashine(arcade.Window):
         self.theme_manager = ThemeManager()
         self.initial_balance = initial_balance
         self.initial_bet = initial_bet
+
+        self.current_avatar = "🐱"
+
+
         self.load_progress()
+
 
         self.reels = [Reel(350, 350), Reel(450, 350), Reel(550, 350)]
         self.spin_button = Button(450, 100, 160, 50, "SPIN")
         self.theme_button = Button(820, 560, 120, 35, "THEME")
+        self.account_button = Button(820, 510, 120, 35, "ACCOUNT")
         self.bet_plus_button = Button(650, 100, 50, 40, "+")
         self.bet_minus_button = Button(250, 100, 50, 40, "-")
 
         self.is_game_spinning = False
         self.win_effect = WinEffect()
         self.apply_theme()
+
 
     def apply_theme(self):
         arcade.set_background_color(self.theme_manager.get("background"))
@@ -382,6 +449,9 @@ class EarnMashine(arcade.Window):
         self.spin_button.color = self.theme_manager.get("button")
         self.bet_plus_button.color = self.theme_manager.get("button")
         self.bet_minus_button.color = self.theme_manager.get("button")
+        self.theme_button.color = self.theme_manager.get("button")
+        self.account_button.color = self.theme_manager.get("button")
+
 
     def load_progress(self):
         conn = sqlite3.connect(DB_NAME)
@@ -389,9 +459,10 @@ class EarnMashine(arcade.Window):
         cursor.execute("""
             SELECT balance, level, xp,
                    total_spins, total_wins,
-                   total_win_amount, lose_streak
+                   total_win_amount, lose_streak,
+                   (SELECT avatar FROM users WHERE id=?)
             FROM progress WHERE user_id=?
-        """, (self.user_id,))
+        """, (self.user_id, self.user_id))
         result = cursor.fetchone()
         if result:
             (
@@ -401,8 +472,10 @@ class EarnMashine(arcade.Window):
                 self.total_spins,
                 self.total_wins,
                 self.total_win_amount,
-                self.lose_streak
+                self.lose_streak,
+                avatar
             ) = result
+            self.current_avatar = avatar or "🐱"
         else:
             self.balance = self.initial_balance
             self.level = 1
@@ -411,6 +484,7 @@ class EarnMashine(arcade.Window):
             self.total_wins = 0
             self.total_win_amount = 0
             self.lose_streak = 0
+            self.current_avatar = "🐱"
         conn.close()
         self.bet = self.initial_bet
         self.xp_to_next = 100
@@ -437,6 +511,7 @@ class EarnMashine(arcade.Window):
         conn.commit()
         conn.close()
 
+
     def add_xp(self, amount):
         self.xp += amount
         if self.xp >= self.xp_to_next:
@@ -448,6 +523,7 @@ class EarnMashine(arcade.Window):
         self.xp_to_next = int(self.xp_to_next * 1.5)
         self.balance += 50
 
+
     def increase_bet(self):
         self.bet += 5
 
@@ -455,14 +531,22 @@ class EarnMashine(arcade.Window):
         if self.bet > 5:
             self.bet -= 5
 
+
     def on_draw(self):
         self.clear()
+
+
         for reel in self.reels:
             reel.draw()
+
+
         self.spin_button.draw()
         self.theme_button.draw()
+        self.account_button.draw()
         self.bet_plus_button.draw()
         self.bet_minus_button.draw()
+
+
         arcade.draw_text(f"Balance: ${self.balance}", 20, SCREEN_HEIGHT - 40,
                          self.theme_manager.get("text"), 18)
         arcade.draw_text(f"LEVEL: {self.level}  XP: {self.xp}/{self.xp_to_next}",
@@ -471,7 +555,21 @@ class EarnMashine(arcade.Window):
                          20, SCREEN_HEIGHT - 90, self.theme_manager.get("text"), 14)
         arcade.draw_text(f"BET: ${self.bet}", SCREEN_WIDTH // 2, 160,
                          self.theme_manager.get("text"), 18, anchor_x="center")
+
+
+        arcade.draw_text(
+            self.current_avatar,
+            self.account_button.x - 70,
+            self.account_button.y,
+            arcade.color.WHITE,
+            24,
+            anchor_x="right",
+            anchor_y="center"
+        )
+
+
         self.win_effect.draw()
+
 
     def on_update(self, delta_time):
         for reel in self.reels:
@@ -481,6 +579,7 @@ class EarnMashine(arcade.Window):
             self.is_game_spinning = False
             self.check_win()
             self.save_progress()
+
 
     def spin_all_reels(self):
         if self.balance < self.bet:
@@ -506,25 +605,37 @@ class EarnMashine(arcade.Window):
             self.lose_streak += 1
             self.add_xp(5)
 
+
     def on_mouse_press(self, x, y, button, modifiers):
         if self.spin_button.check_click(x, y) and not self.is_game_spinning:
             self.spin_all_reels()
         if self.theme_button.check_click(x, y):
             self.theme_manager.toggle_theme()
             self.apply_theme()
+        if self.account_button.check_click(x, y):
+            self.open_account_window()
         if self.bet_plus_button.check_click(x, y):
             self.increase_bet()
         if self.bet_minus_button.check_click(x, y):
             self.decrease_bet()
 
-def main():
-    init_db()
-    ok, user_id, init_balance, init_bet = run_login()
-    if ok:
-        arcade.play_sound(background_music, loop=True, volume=0.8)
-        EarnMashine(user_id, init_balance, init_bet)
-        arcade.run()
+
+    def open_account_window(self):
+        self.app = QtWidgets.QApplication.instance()
+        if self.app is None:
+            self.app = QtWidgets.QApplication(sys.argv)
+        self.account_window = AccountWindow(self.user_id)
+        self.account_window.show()
+        self.account_window.save_button.clicked.connect(self.update_avatar_from_account)
+
+    def update_avatar_from_account(self):
+        self.current_avatar = self.account_window.selected_avatar
+
 
 
 if __name__ == "__main__":
-    main()
+    init_db()
+    authenticated, user_id, balance, bet = run_login()
+    if authenticated:
+        game = EarnMashine(user_id, balance, bet)
+        arcade.run()
