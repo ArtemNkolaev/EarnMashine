@@ -5,6 +5,41 @@ import sys
 import sqlite3
 from PyQt6 import QtWidgets
 
+
+class MusicManager:
+    def __init__(self, music_path):
+        self.music = arcade.load_sound(music_path)
+        self.player = None
+        self.enabled = True
+        self.volume = 0.8
+
+    def play(self):
+        if not self.enabled:
+            return
+
+        if self.player is None:
+            self.player = arcade.play_sound(self.music, volume=self.volume)
+            if self.player:
+                self.player.loop = True
+
+    def stop(self):
+        if self.player:
+            self.player.pause()
+            self.player = None
+
+    def toggle(self):
+        self.enabled = not self.enabled
+        if self.enabled:
+            self.play()
+        else:
+            self.stop()
+
+    def set_volume(self, volume):
+        self.volume = max(0.0, min(1.0, volume))
+        if self.player:
+            self.stop()
+            self.play()
+
 DB_NAME = "users.db"
 
 
@@ -314,6 +349,33 @@ class Button:
             self.y - self.height / 2 <= y <= self.y + self.height / 2
         )
 
+class MenuButton(Button):
+    def __init__(self, x, y, width, height, text):
+        super().__init__(x, y, width, height, text)
+        self.hovered = False
+
+    def draw(self):
+        color = arcade.color.ORANGE if self.hovered else self.color
+        arcade.draw_lbwh_rectangle_filled(
+            self.x - self.width / 2,
+            self.y - self.height / 2,
+            self.width,
+            self.height,
+            color
+        )
+        arcade.draw_text(
+            self.text,
+            self.x,
+            self.y,
+            arcade.color.WHITE,
+            20,
+            anchor_x="center",
+            anchor_y="center"
+        )
+
+    def update_hover(self, x, y):
+        self.hovered = self.check_click(x, y)
+
 
 class Reel:
     def __init__(self, x, y):
@@ -414,6 +476,84 @@ class AccountWindow(QtWidgets.QWidget):
         conn.close()
         self.status_label.setText(f"Avatar saved: {self.selected_avatar}")
 
+class MainMenu(arcade.Window):
+    def __init__(self):
+        super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, "EarnMashine — Menu")
+        arcade.set_background_color(arcade.color.DARK_BLUE_GRAY)
+
+        self.music_manager = MusicManager("music/music.mp3")
+        self.music_manager.play()
+
+        self.start_button = MenuButton(
+            SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 60,
+            260, 70, "▶ START GAME"
+        )
+
+        self.music_button = MenuButton(
+            SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 30,
+            260, 60, "🔊 MUSIC: ON"
+        )
+
+        self.exit_button = MenuButton(
+            SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 120,
+            260, 60, "❌ EXIT"
+        )
+
+        self.buttons = [
+            self.start_button,
+            self.music_button,
+            self.exit_button
+        ]
+
+    def on_draw(self):
+        self.clear()
+
+        arcade.draw_text(
+            "🎰 EARNMASHINE 🎰",
+            SCREEN_WIDTH // 2,
+            SCREEN_HEIGHT - 120,
+            arcade.color.GOLD,
+            48,
+            anchor_x="center"
+        )
+
+        arcade.draw_text(
+            "Welcome! Choose an option to continue",
+            SCREEN_WIDTH // 2,
+            SCREEN_HEIGHT - 180,
+            arcade.color.LIGHT_GRAY,
+            20,
+            anchor_x="center"
+        )
+
+        for button in self.buttons:
+            button.draw()
+
+    def on_mouse_motion(self, x, y, dx, dy):
+        for button in self.buttons:
+            button.update_hover(x, y)
+
+    def on_mouse_press(self, x, y, button, modifiers):
+        if self.start_button.check_click(x, y):
+            self.music_manager.stop()
+            self.close()
+
+            game = EarnMashine(
+                GLOBAL_USER_ID,
+                GLOBAL_BALANCE,
+                GLOBAL_BET
+            )
+            arcade.run()
+
+        elif self.music_button.check_click(x, y):
+            self.music_manager.toggle()
+            self.music_button.text = (
+                "🔊 MUSIC: ON" if self.music_manager.enabled else "🔇 MUSIC: OFF"
+            )
+
+        elif self.exit_button.check_click(x, y):
+            self.music_manager.stop()
+            arcade.exit()
 
 class EarnMashine(arcade.Window):
     def __init__(self, user_id, initial_balance=1000, initial_bet=10):
@@ -635,7 +775,15 @@ class EarnMashine(arcade.Window):
 
 if __name__ == "__main__":
     init_db()
+
     authenticated, user_id, balance, bet = run_login()
-    if authenticated:
-        game = EarnMashine(user_id, balance, bet)
-        arcade.run()
+    if not authenticated:
+        sys.exit()
+
+    GLOBAL_USER_ID = user_id
+    GLOBAL_BALANCE = balance
+    GLOBAL_BET = bet
+
+    menu = MainMenu()
+    arcade.run()
+
