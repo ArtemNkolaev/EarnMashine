@@ -1,302 +1,789 @@
 import arcade
 import random
-from pyglet.graphics import Batch
 import time
-import threading
+import sys
+import sqlite3
+from PyQt6 import QtWidgets
 
 
-background_music = arcade.load_sound("music/music.mp3")
+class MusicManager:
+    def __init__(self, music_path):
+        self.music = arcade.load_sound(music_path)
+        self.player = None
+        self.enabled = True
+        self.volume = 0.8
+
+    def play(self):
+        if not self.enabled:
+            return
+
+        if self.player is None:
+            self.player = arcade.play_sound(self.music, volume=self.volume)
+            if self.player:
+                self.player.loop = True
+
+    def stop(self):
+        if self.player:
+            self.player.pause()
+            self.player = None
+
+    def toggle(self):
+        self.enabled = not self.enabled
+        if self.enabled:
+            self.play()
+        else:
+            self.stop()
+
+    def set_volume(self, volume):
+        self.volume = max(0.0, min(1.0, volume))
+        if self.player:
+            self.stop()
+            self.play()
+
+DB_NAME = "users.db"
+
+
+def init_db():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            avatar TEXT DEFAULT '🐱'
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS progress (
+            user_id INTEGER PRIMARY KEY,
+            balance INTEGER DEFAULT 1000,
+            level INTEGER DEFAULT 1,
+            xp INTEGER DEFAULT 0,
+            total_spins INTEGER DEFAULT 0,
+            total_wins INTEGER DEFAULT 0,
+            total_win_amount INTEGER DEFAULT 0,
+            lose_streak INTEGER DEFAULT 0,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+
+
+class LoginWindow(QtWidgets.QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("EarnMashine Login")
+        self.setGeometry(500, 300, 350, 250)
+
+        self.user_authenticated = False
+        self.user_id = None
+        self.initial_balance = 1000
+        self.initial_bet = 10
+
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QtWidgets.QVBoxLayout()
+
+        self.username_input = QtWidgets.QLineEdit()
+        self.username_input.setPlaceholderText("Username")
+        layout.addWidget(self.username_input)
+
+        self.password_input = QtWidgets.QLineEdit()
+        self.password_input.setPlaceholderText("Password")
+        self.password_input.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        layout.addWidget(self.password_input)
+
+        self.balance_input = QtWidgets.QLineEdit()
+        self.balance_input.setPlaceholderText("Initial Balance (e.g. 2000)")
+        layout.addWidget(self.balance_input)
+
+        self.bet_input = QtWidgets.QLineEdit()
+        self.bet_input.setPlaceholderText("Initial Bet (e.g. 10)")
+        layout.addWidget(self.bet_input)
+
+        self.apply_button = QtWidgets.QPushButton("Apply Settings")
+        self.apply_button.clicked.connect(self.apply_settings)
+        layout.addWidget(self.apply_button)
+
+        self.info_label = QtWidgets.QLabel("")
+        layout.addWidget(self.info_label)
+
+        self.login_button = QtWidgets.QPushButton("Login")
+        self.login_button.clicked.connect(self.login_user)
+        layout.addWidget(self.login_button)
+
+        self.register_button = QtWidgets.QPushButton("Register")
+        self.register_button.clicked.connect(self.register_user)
+        layout.addWidget(self.register_button)
+
+        self.setLayout(layout)
+
+    def apply_settings(self):
+        try:
+            balance = int(self.balance_input.text())
+            bet = int(self.bet_input.text())
+            if balance <= 0 or bet <= 0:
+                self.info_label.setText("Balance and bet must be > 0")
+                return
+            self.initial_balance = balance
+            self.initial_bet = bet
+            self.info_label.setText(f"Applied: Balance=${balance}, Bet=${bet}")
+        except ValueError:
+            self.info_label.setText("Enter valid integers for balance and bet")
+
+    def login_user(self):
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "SELECT id FROM users WHERE username=? AND password=?",
+            (self.username_input.text(), self.password_input.text())
+        )
+
+        result = cursor.fetchone()
+        conn.close()
+
+        if result:
+            self.user_authenticated = True
+            self.user_id = result[0]
+            self.close()
+        else:
+            self.info_label.setText("Invalid username or password")
+
+    def register_user(self):
+        try:
+            conn = sqlite3.connect(DB_NAME)
+            cursor = conn.cursor()
+
+            cursor.execute(
+                "INSERT INTO users (username, password) VALUES (?, ?)",
+                (self.username_input.text(), self.password_input.text())
+            )
+
+            user_id = cursor.lastrowid
+            cursor.execute(
+                "INSERT INTO progress (user_id, balance) VALUES (?, ?)",
+                (user_id, self.initial_balance)
+            )
+
+            conn.commit()
+            conn.close()
+
+            self.info_label.setText("Registration successful!")
+
+        except sqlite3.IntegrityError:
+            self.info_label.setText("Username already exists")
+
+def run_login():
+    app = QtWidgets.QApplication(sys.argv)
+    window = LoginWindow()
+    window.show()
+    app.exec()
+    return window.user_authenticated, window.user_id, window.initial_balance, window.initial_bet
 
 
 SCREEN_WIDTH = 900
 SCREEN_HEIGHT = 600
 SCREEN_TITLE = "EarnMashine"
+
 SYMBOLS = [
-    {"emoji": "🍒", "name": "Cherry", "multiplier": 2, "weight": 30},
-    {"emoji": "🍋", "name": "Lemon", "multiplier": 3, "weight": 25},
-    {"emoji": "🔔", "name": "Bell", "multiplier": 5, "weight": 20},
-    {"emoji": "🥝", "name": "Kiwi", "multiplier": 10, "weight": 15},
-    {"emoji": "🍌", "name": "Banana", "multiplier": 20, "weight": 10},
+    {"emoji": "🍒", "multiplier": 2, "weight": 30},
+    {"emoji": "🍋", "multiplier": 3, "weight": 25},
+    {"emoji": "🔔", "multiplier": 5, "weight": 20},
+    {"emoji": "🥝", "multiplier": 10, "weight": 15},
+    {"emoji": "🍌", "multiplier": 20, "weight": 10},
 ]
 
 
-class EarnMashine(arcade.Window):
+class ThemeManager:
     def __init__(self):
-        super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_TITLE)
-        arcade.set_background_color(arcade.color.ARMY_GREEN)
+        self.current_theme = "light"
+        self.themes = {}
+        self.load_themes()
 
-        self.balance = 1000
-        self.bet = 10
-        self.spin_cost = 10
+    def load_themes(self):
+        self.themes["light"] = {
+            "background": arcade.color.ARMY_GREEN,
+            "reel_bg": arcade.color.DARK_GRAY,
+            "reel_border": arcade.color.GOLD,
+            "button": arcade.color.GREEN,
+            "text": arcade.color.WHITE
+        }
 
-        reel_width = 180
-        reel_height = 300
-        reel_spacing = 20
-        total_width = reel_width * 3 + reel_spacing * 2
-        start_x = (SCREEN_WIDTH - total_width) / 2 + reel_width / 2
-        self.reels = [
-            Reel(start_x, 350, reel_width, reel_height),
-            Reel(start_x + reel_width + reel_spacing, 350, reel_width, reel_height),
-            Reel(start_x + (reel_width + reel_spacing) * 2, 350, reel_width, reel_height)
-        ]
+        self.themes["dark"] = {
+            "background": arcade.color.BLACK,
+            "reel_bg": arcade.color.DARK_SLATE_GRAY,
+            "reel_border": arcade.color.GOLD,
+            "button": arcade.color.DARK_GREEN,
+            "text": arcade.color.WHITE
+        }
 
-        self.spin_button = Button(
-            x=SCREEN_WIDTH // 2, y=100,
-            width=150, height=50,
-            text=f"SPIN ({self.spin_cost}$)",
-            color=arcade.color.GREEN
-        )
+    def toggle_theme(self):
+        self.current_theme = "dark" if self.current_theme == "light" else "light"
 
-        self.is_game_spinning = False
-        self.info_text = f"Balance: ${self.balance} | Bet: ${self.bet}"
-
-        self.level = 1
-        self.xp = 0
-        self.xp_to_next = 100
-
-        self.autospin = False
-        self.autospin_delay = 1.2
-        self.last_autospin_time = 0
+    def get(self, key):
+        return self.themes[self.current_theme][key]
 
 
-        self.total_spins = 0
-        self.total_wins = 0
-        self.total_win_amount = 0
-        self.lose_streak = 0
+class WinEffect:
+    def __init__(self):
+        self.active = False
+        self.start_time = 0
+        self.duration = 1.5
+        self.particles = [] 
+        self.x = 0 
+        self.y = 0
+        self.text_size = 48
+        self.rising_speed = 50
 
-        self.last_results = []
-        self.win_flash = 0
-
-    def on_draw(self):
-        self.clear()
-        for reel in self.reels:
-            reel.draw()
-        self.spin_button.draw()
-
-        arcade.draw_text(
-            self.info_text,
-            SCREEN_WIDTH // 2, 180,
-            arcade.color.WHITE, 20,
-            align="center", anchor_x="center"
-        )
-        arcade.draw_text(
-            f"LEVEL: {self.level}  XP: {self.xp}/{self.xp_to_next}",
-            20, SCREEN_HEIGHT - 40,
-            arcade.color.GOLD, 16
-        )
-        arcade.draw_text(
-            f"SPINS: {self.total_spins}  WINS: {self.total_wins}",
-            20, SCREEN_HEIGHT - 65,
-            arcade.color.GOLD, 14
-        )
-
-        if self.win_flash > 0:
-            arcade.draw_lrbt_rectangle_filled(
-                left=0,
-                right=SCREEN_WIDTH,
-                bottom=0,
-                top=SCREEN_HEIGHT,
-                color=(255, 215, 0, 60)
-            )
-
-
-    def on_update(self, delta_time):
-        for reel in self.reels:
-            reel.update()
-
-        if self.is_game_spinning:
-            if not any(r.is_spinning for r in self.reels):
-                self.is_game_spinning = False
-                self.check_win()
-
-
-        if self.autospin and not self.is_game_spinning:
-            if time.time() - self.last_autospin_time >= self.autospin_delay:
-                self.spin_all_reels()
-                self.last_autospin_time = time.time()
-
-
-        if self.win_flash > 0:
-            self.win_flash -= delta_time
-
-    def spin_all_reels(self):
-        if self.balance < self.spin_cost:
-            return
-
-        self.balance -= self.spin_cost
-        self.total_spins += 1
-        self.add_xp(10)
-
-        self.info_text = f"Balance: ${self.balance} | Bet: ${self.bet}"
-
-        for reel in self.reels:
-            reel.start_spin(random.uniform(1.5, 2.5))
-
-        self.is_game_spinning = True
-
-    def check_win(self):
-        symbols = [SYMBOLS[r.current_symbol_idx]["emoji"] for r in self.reels]
-
-        self.last_results.append(symbols)
-        if len(self.last_results) > 5:
-            self.last_results.pop(0)
-
-
-        if symbols[0] == symbols[1] == symbols[2]:
-            symbol_idx = self.reels[0].current_symbol_idx
-            multiplier = SYMBOLS[symbol_idx]["multiplier"]
-            win_amount = self.bet * multiplier
-
-            self.balance += win_amount
-            self.total_wins += 1
-            self.total_win_amount += win_amount
-            self.lose_streak = 0
-
-            self.add_xp(25)
-
-            self.win_flash = 0.4
-
-            self.info_text = (
-                f"JACKPOT! {symbols[0]} x{multiplier} "
-                f"+${win_amount} | Balance: ${self.balance}"
-            )
-
-        else:
-            self.lose_streak += 1
-            self.add_xp(5)
-
-            if self.lose_streak >= 5:
-                bonus = 20
-                self.balance += bonus
-                self.lose_streak = 0
-                self.info_text = f"BONUS +${bonus} for try again!"
-            else:
-                self.info_text = f"Balance: ${self.balance} | Bet: ${self.bet}"
-
-    def on_mouse_press(self, x: int, y: int, button: int, modifiers: int):
-        if self.spin_button.check_click(x, y) and not self.is_game_spinning:
-            self.spin_button.is_pressed = True
-            self.spin_all_reels()
-
-    def on_mouse_release(self, x: int, y: int, button: int, modifiers: int):
-        self.spin_button.is_pressed = False
-
-    def add_xp(self, amount):
-        self.xp += amount
-        if self.xp >= self.xp_to_next:
-            self.xp -= self.xp_to_next
-            self.level += 1
-            self.xp_to_next = int(self.xp_to_next * 1.5)
-            self.info_text = f"LEVEL UP! Level {self.level}"
-
-class Reel:
-    def __init__(self, x, y, width, height):
+    def start(self, x, y):
+        self.active = True
+        self.start_time = time.time()
         self.x = x
         self.y = y
-        self.width = width
-        self.height = height
-        self.batch = Batch()
 
-        self.reel_text = arcade.Text(
-            "SPINNING...",
-            self.x - self.width // 3,
-            self.height - 80,
-            arcade.color.YELLOW,
-            16,
-            align="center",
-            batch=self.batch
-        )
-
-        self.current_symbol_idx = 0
-        self.is_spinning = False
-        self.spin_speed = 0.01
-        self.last_spin_time = 0
-        self.final_symbol_idx = 0
-        self.bg_color = arcade.color.DARK_GRAY
-        self.border_color = arcade.color.GOLD
-
-    def start_spin(self, duration=1.5):
-        self.is_spinning = True
-        self.spin_start_time = time.time()
-        self.spin_duration = duration
-        self.last_symbol_change = time.time()
-        weights = [s["weight"] for s in SYMBOLS]
-        self.final_symbol_idx = random.choices(range(len(SYMBOLS)), weights=weights)[0]
+        self.particles = []
+        for _ in range(40):
+            particle = {
+                "x": x,
+                "y": y,
+                "dx": random.uniform(-3, 3),
+                "dy": random.uniform(2, 6),
+                "radius": random.randint(2, 6),
+                "color": random.choice([
+                    arcade.color.YELLOW,
+                    arcade.color.GOLD,
+                    arcade.color.ORANGE,
+                    arcade.color.RED_ORANGE
+                ])
+            }
+            self.particles.append(particle)
 
     def update(self):
-        if not self.is_spinning:
+        if not self.active:
             return
 
-        current_time = time.time()
-        elapsed = current_time - self.spin_start_time
-
-        if elapsed >= self.spin_duration:
-            self.is_spinning = False
-            self.current_symbol_idx = self.final_symbol_idx
-            self.spin_speed = 0.1
+        elapsed = time.time() - self.start_time
+        if elapsed > self.duration:
+            self.active = False
+            self.particles = []
             return
 
-        if current_time - self.last_spin_time > self.spin_speed:
-            self.current_symbol_idx = (self.current_symbol_idx + 1) % len(SYMBOLS)
-            self.last_spin_time = current_time
+        for p in self.particles:
+            p["x"] += p["dx"]
+            p["y"] += p["dy"]
+            p["radius"] *= 0.93
 
-            if elapsed > self.spin_duration * 0.7:
-                self.spin_speed = min(self.spin_speed * 1.1, 0.3)
+        self.y += self.rising_speed * 0.016
+        self.text_size = max(24, self.text_size * 0.98)
 
     def draw(self):
-        arcade.draw_lbwh_rectangle_filled(
-            self.x - self.width // 2, self.y - self.height // 3, self.width, self.height, self.bg_color
-        )
-        arcade.draw_lbwh_rectangle_outline(
-            self.x - self.width // 2, self.y - self.height // 3, self.width, self.height, self.border_color, 3
-        )
-        symbol = SYMBOLS[self.current_symbol_idx]["emoji"]
+        if not self.active:
+            return
+
+        for p in self.particles:
+            arcade.draw_circle_filled(
+                p["x"],
+                p["y"],
+                max(1, p["radius"]),
+                p["color"]
+            )
+
         arcade.draw_text(
-            symbol,
+            "WIN!",
             self.x,
-            self.y,
-            arcade.color.WHITE,
-            70,
-            align="center",
+            self.y + 100,
+            arcade.color.YELLOW_ORANGE,
+            self.text_size,
             anchor_x="center",
             anchor_y="center"
         )
-        if self.is_spinning:
-            self.batch.draw()
+
+        for i in range(5):
+            star_x = self.x + random.randint(-60, 60)
+            star_y = self.y + 100 + random.randint(-20, 20)
+            radius = random.randint(1, 3)
+            arcade.draw_circle_filled(star_x, star_y, radius, arcade.color.WHITE)
+        arcade.draw_circle_outline(
+            self.x,
+            self.y + 100,
+            self.text_size + 20,
+            arcade.color.LIGHT_YELLOW,
+            2
+        )
+
 
 class Button:
-    def __init__(self, x, y, width, height, text,
-                 color=arcade.color.GREEN,
-                 text_color=arcade.color.WHITE):
+    def __init__(self, x, y, width, height, text):
         self.x = x
         self.y = y
         self.width = width
         self.height = height
         self.text = text
-        self.color = color
-        self.text_color = text_color
-        self.is_pressed = False
-        self.rect = (self.x - self.width, self.y - self.height, self.width * 2, self.height * 2)
-        self.batch = Batch()
-        self.but_text = arcade.Text(
-            self.text, self.x - 31, self.y,
-            self.text_color, 20,
-            align="center", batch=self.batch
-        )
+        self.color = arcade.color.GRAY
 
     def draw(self):
-        current_color = arcade.color.RED if self.is_pressed else self.color
-        arcade.draw_lbwh_rectangle_filled(*self.rect, current_color)
-        self.batch.draw()
+        arcade.draw_lbwh_rectangle_filled(
+            self.x - self.width / 2,
+            self.y - self.height / 2,
+            self.width,
+            self.height,
+            self.color
+        )
+        arcade.draw_text(
+            self.text,
+            self.x, self.y,
+            arcade.color.WHITE, 14,
+            anchor_x="center", anchor_y="center"
+        )
 
     def check_click(self, x, y):
-        return (self.x - self.width <= x <= self.x + self.width and
-                self.y - self.height <= y <= self.y + self.height)
+        return (
+            self.x - self.width / 2 <= x <= self.x + self.width / 2 and
+            self.y - self.height / 2 <= y <= self.y + self.height / 2
+        )
 
-def main():
-    game = EarnMashine()
-    arcade.play_sound(background_music, volume=0.9, loop=True)
-    arcade.run()
+class MenuButton(Button):
+    def __init__(self, x, y, width, height, text):
+        super().__init__(x, y, width, height, text)
+        self.hovered = False
+
+    def draw(self):
+        color = arcade.color.ORANGE if self.hovered else self.color
+        arcade.draw_lbwh_rectangle_filled(
+            self.x - self.width / 2,
+            self.y - self.height / 2,
+            self.width,
+            self.height,
+            color
+        )
+        arcade.draw_text(
+            self.text,
+            self.x,
+            self.y,
+            arcade.color.WHITE,
+            20,
+            anchor_x="center",
+            anchor_y="center"
+        )
+
+    def update_hover(self, x, y):
+        self.hovered = self.check_click(x, y)
+
+
+class Reel:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        self.current_symbol_idx = 0
+        self.is_spinning = False
+        self.bg_color = arcade.color.DARK_GRAY
+        self.border_color = arcade.color.GOLD
+
+    def start_spin(self):
+        self.is_spinning = True
+        self.stop_time = time.time() + random.uniform(1.5, 2.5)
+
+    def update(self):
+        if self.is_spinning:
+            self.current_symbol_idx = random.randint(0, len(SYMBOLS) - 1)
+            if time.time() >= self.stop_time:
+                self.is_spinning = False
+
+    def draw(self):
+        arcade.draw_lbwh_rectangle_filled(
+            self.x - 45, self.y - 70, 90, 140, self.bg_color
+        )
+        arcade.draw_lbwh_rectangle_outline(
+            self.x - 45, self.y - 70, 90, 140, self.border_color, 3
+        )
+        arcade.draw_text(
+            SYMBOLS[self.current_symbol_idx]["emoji"],
+            self.x, self.y,
+            arcade.color.WHITE, 48,
+            anchor_x="center", anchor_y="center"
+        )
+
+
+class AccountWindow(QtWidgets.QWidget):
+    def __init__(self, user_id):
+        super().__init__()
+        self.user_id = user_id
+        self.setWindowTitle("Account Settings")
+        self.setGeometry(600, 350, 400, 350)
+        self.selected_avatar = "🐱"
+        self.init_ui()
+        self.load_user_data()
+
+    def init_ui(self):
+        layout = QtWidgets.QVBoxLayout()
+
+        self.username_label = QtWidgets.QLabel("Username: ")
+        layout.addWidget(self.username_label)
+
+        self.password_label = QtWidgets.QLabel("Password: ")
+        layout.addWidget(self.password_label)
+
+        layout.addWidget(QtWidgets.QLabel("Choose your avatar:"))
+
+        self.avatar_buttons = {}
+        avatars = ["🐱", "🐶", "🐻", "🐦"]
+        avatar_layout = QtWidgets.QHBoxLayout()
+        for av in avatars:
+            btn = QtWidgets.QPushButton(av)
+            btn.setFixedSize(60, 60)
+            btn.clicked.connect(lambda checked, a=av: self.select_avatar(a))
+            avatar_layout.addWidget(btn)
+            self.avatar_buttons[av] = btn
+        layout.addLayout(avatar_layout)
+
+        self.save_button = QtWidgets.QPushButton("Save Changes")
+        self.save_button.clicked.connect(self.save_changes)
+        layout.addWidget(self.save_button)
+
+        self.status_label = QtWidgets.QLabel("")
+        layout.addWidget(self.status_label)
+
+        self.setLayout(layout)
+
+    def load_user_data(self):
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("SELECT username, password, avatar FROM users WHERE id=?", (self.user_id,))
+        result = cursor.fetchone()
+        conn.close()
+        if result:
+            username, password, avatar = result
+            self.username_label.setText(f"Username: {username}")
+            self.password_label.setText(f"Password: {'*' * len(password)}")
+            self.selected_avatar = avatar
+
+    def select_avatar(self, avatar):
+        self.selected_avatar = avatar
+        self.status_label.setText(f"Selected avatar: {avatar}")
+
+    def save_changes(self):
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET avatar=? WHERE id=?", (self.selected_avatar, self.user_id))
+        conn.commit()
+        conn.close()
+        self.status_label.setText(f"Avatar saved: {self.selected_avatar}")
+
+class MainMenu(arcade.Window):
+    def __init__(self):
+        super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, "EarnMashine — Menu")
+        arcade.set_background_color(arcade.color.DARK_BLUE_GRAY)
+
+        self.music_manager = MusicManager("music/music.mp3")
+        self.music_manager.play()
+
+        self.start_button = MenuButton(
+            SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 60,
+            260, 70, "▶ START GAME"
+        )
+
+        self.music_button = MenuButton(
+            SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 30,
+            260, 60, "🔊 MUSIC: ON"
+        )
+
+        self.exit_button = MenuButton(
+            SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 120,
+            260, 60, "❌ EXIT"
+        )
+
+        self.buttons = [
+            self.start_button,
+            self.music_button,
+            self.exit_button
+        ]
+
+    def on_draw(self):
+        self.clear()
+
+        arcade.draw_text(
+            "🎰 EARNMASHINE 🎰",
+            SCREEN_WIDTH // 2,
+            SCREEN_HEIGHT - 120,
+            arcade.color.GOLD,
+            48,
+            anchor_x="center"
+        )
+
+        arcade.draw_text(
+            "Welcome! Choose an option to continue",
+            SCREEN_WIDTH // 2,
+            SCREEN_HEIGHT - 180,
+            arcade.color.LIGHT_GRAY,
+            20,
+            anchor_x="center"
+        )
+
+        for button in self.buttons:
+            button.draw()
+
+    def on_mouse_motion(self, x, y, dx, dy):
+        for button in self.buttons:
+            button.update_hover(x, y)
+
+    def on_mouse_press(self, x, y, button, modifiers):
+        if self.start_button.check_click(x, y):
+            self.music_manager.stop()
+            self.close()
+
+            game = EarnMashine(
+                GLOBAL_USER_ID,
+                GLOBAL_BALANCE,
+                GLOBAL_BET
+            )
+            arcade.run()
+
+        elif self.music_button.check_click(x, y):
+            self.music_manager.toggle()
+            self.music_button.text = (
+                "🔊 MUSIC: ON" if self.music_manager.enabled else "🔇 MUSIC: OFF"
+            )
+
+        elif self.exit_button.check_click(x, y):
+            self.music_manager.stop()
+            arcade.exit()
+
+class EarnMashine(arcade.Window):
+    def __init__(self, user_id, initial_balance=1000, initial_bet=10):
+        super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_TITLE)
+        self.user_id = user_id
+        self.theme_manager = ThemeManager()
+        self.initial_balance = initial_balance
+        self.initial_bet = initial_bet
+
+        self.current_avatar = "🐱"
+
+
+        self.load_progress()
+
+
+        self.reels = [Reel(350, 350), Reel(450, 350), Reel(550, 350)]
+        self.spin_button = Button(450, 100, 160, 50, "SPIN")
+        self.theme_button = Button(820, 560, 120, 35, "THEME")
+        self.account_button = Button(820, 510, 120, 35, "ACCOUNT")
+        self.bet_plus_button = Button(650, 100, 50, 40, "+")
+        self.bet_minus_button = Button(250, 100, 50, 40, "-")
+
+        self.is_game_spinning = False
+        self.win_effect = WinEffect()
+        self.apply_theme()
+
+
+    def apply_theme(self):
+        arcade.set_background_color(self.theme_manager.get("background"))
+        for reel in self.reels:
+            reel.bg_color = self.theme_manager.get("reel_bg")
+            reel.border_color = self.theme_manager.get("reel_border")
+        self.spin_button.color = self.theme_manager.get("button")
+        self.bet_plus_button.color = self.theme_manager.get("button")
+        self.bet_minus_button.color = self.theme_manager.get("button")
+        self.theme_button.color = self.theme_manager.get("button")
+        self.account_button.color = self.theme_manager.get("button")
+
+
+    def load_progress(self):
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT balance, level, xp,
+                   total_spins, total_wins,
+                   total_win_amount, lose_streak,
+                   (SELECT avatar FROM users WHERE id=?)
+            FROM progress WHERE user_id=?
+        """, (self.user_id, self.user_id))
+        result = cursor.fetchone()
+        if result:
+            (
+                self.balance,
+                self.level,
+                self.xp,
+                self.total_spins,
+                self.total_wins,
+                self.total_win_amount,
+                self.lose_streak,
+                avatar
+            ) = result
+            self.current_avatar = avatar or "🐱"
+        else:
+            self.balance = self.initial_balance
+            self.level = 1
+            self.xp = 0
+            self.total_spins = 0
+            self.total_wins = 0
+            self.total_win_amount = 0
+            self.lose_streak = 0
+            self.current_avatar = "🐱"
+        conn.close()
+        self.bet = self.initial_bet
+        self.xp_to_next = 100
+
+    def save_progress(self):
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE progress SET
+            balance=?, level=?, xp=?,
+            total_spins=?, total_wins=?,
+            total_win_amount=?, lose_streak=?
+            WHERE user_id=?
+        """, (
+            self.balance,
+            self.level,
+            self.xp,
+            self.total_spins,
+            self.total_wins,
+            self.total_win_amount,
+            self.lose_streak,
+            self.user_id
+        ))
+        conn.commit()
+        conn.close()
+
+
+    def add_xp(self, amount):
+        self.xp += amount
+        if self.xp >= self.xp_to_next:
+            self.level_up()
+
+    def level_up(self):
+        self.xp -= self.xp_to_next
+        self.level += 1
+        self.xp_to_next = int(self.xp_to_next * 1.5)
+        self.balance += 50
+
+
+    def increase_bet(self):
+        self.bet += 5
+
+    def decrease_bet(self):
+        if self.bet > 5:
+            self.bet -= 5
+
+
+    def on_draw(self):
+        self.clear()
+
+
+        for reel in self.reels:
+            reel.draw()
+
+
+        self.spin_button.draw()
+        self.theme_button.draw()
+        self.account_button.draw()
+        self.bet_plus_button.draw()
+        self.bet_minus_button.draw()
+
+
+        arcade.draw_text(f"Balance: ${self.balance}", 20, SCREEN_HEIGHT - 40,
+                         self.theme_manager.get("text"), 18)
+        arcade.draw_text(f"LEVEL: {self.level}  XP: {self.xp}/{self.xp_to_next}",
+                         20, SCREEN_HEIGHT - 65, self.theme_manager.get("text"), 14)
+        arcade.draw_text(f"SPINS: {self.total_spins}  WINS: {self.total_wins}",
+                         20, SCREEN_HEIGHT - 90, self.theme_manager.get("text"), 14)
+        arcade.draw_text(f"BET: ${self.bet}", SCREEN_WIDTH // 2, 160,
+                         self.theme_manager.get("text"), 18, anchor_x="center")
+
+
+        arcade.draw_text(
+            self.current_avatar,
+            self.account_button.x - 70,
+            self.account_button.y,
+            arcade.color.WHITE,
+            24,
+            anchor_x="right",
+            anchor_y="center"
+        )
+
+
+        self.win_effect.draw()
+
+
+    def on_update(self, delta_time):
+        for reel in self.reels:
+            reel.update()
+        self.win_effect.update()
+        if self.is_game_spinning and not any(r.is_spinning for r in self.reels):
+            self.is_game_spinning = False
+            self.check_win()
+            self.save_progress()
+
+
+    def spin_all_reels(self):
+        if self.balance < self.bet:
+            return
+        self.balance -= self.bet
+        self.total_spins += 1
+        self.add_xp(10)
+        for reel in self.reels:
+            reel.start_spin()
+        self.is_game_spinning = True
+
+    def check_win(self):
+        ids = [r.current_symbol_idx for r in self.reels]
+        if ids[0] == ids[1] == ids[2]:
+            win = self.bet * SYMBOLS[ids[0]]["multiplier"]
+            self.balance += win
+            self.total_wins += 1
+            self.total_win_amount += win
+            self.lose_streak = 0
+            self.add_xp(25)
+            self.win_effect.start(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
+        else:
+            self.lose_streak += 1
+            self.add_xp(5)
+
+
+    def on_mouse_press(self, x, y, button, modifiers):
+        if self.spin_button.check_click(x, y) and not self.is_game_spinning:
+            self.spin_all_reels()
+        if self.theme_button.check_click(x, y):
+            self.theme_manager.toggle_theme()
+            self.apply_theme()
+        if self.account_button.check_click(x, y):
+            self.open_account_window()
+        if self.bet_plus_button.check_click(x, y):
+            self.increase_bet()
+        if self.bet_minus_button.check_click(x, y):
+            self.decrease_bet()
+
+
+    def open_account_window(self):
+        self.app = QtWidgets.QApplication.instance()
+        if self.app is None:
+            self.app = QtWidgets.QApplication(sys.argv)
+        self.account_window = AccountWindow(self.user_id)
+        self.account_window.show()
+        self.account_window.save_button.clicked.connect(self.update_avatar_from_account)
+
+    def update_avatar_from_account(self):
+        self.current_avatar = self.account_window.selected_avatar
+
+
 
 if __name__ == "__main__":
-    main()
+    init_db()
+
+    authenticated, user_id, balance, bet = run_login()
+    if not authenticated:
+        sys.exit()
+
+    GLOBAL_USER_ID = user_id
+    GLOBAL_BALANCE = balance
+    GLOBAL_BET = bet
+
+    menu = MainMenu()
+    arcade.run()
+
